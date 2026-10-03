@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from sravaani_eval import settings
+from kural_stt import settings
 
 OK, WARN, FAIL = "OK  ", "WARN", "FAIL"
 results = []
@@ -39,7 +39,7 @@ def main() -> None:
     report(OK, "PyTorch", f"{torch.__version__} (CUDA build: {cuda_build})")
     cores = os.cpu_count() or 1
     report(OK if cores >= 8 else WARN, "CPU threads", f"{cores} logical cores; {settings.SRAVAANI_WORKERS} workers configured")
-    from sravaani_eval.transcribe import total_ram_gb
+    from kural_stt.transcribe import total_ram_gb
 
     ram = total_ram_gb()
     need = settings.SRAVAANI_WORKERS * settings.SRAVAANI_WORKER_RAM_GB + 4
@@ -68,7 +68,7 @@ def main() -> None:
         print("\nFix the FAIL lines above, then run this again.")
         sys.exit(1)
 
-    from sravaani_eval.transcribe import load_model, pick_device, threads_per_worker
+    from kural_stt.transcribe import load_model, pick_device, threads_per_worker
 
     device = pick_device()
     threads = threads_per_worker(device, settings.SRAVAANI_WORKERS)
@@ -87,7 +87,7 @@ def main() -> None:
     if smi:
         report(OK, "nvidia-smi after", nvidia_smi())
     print(f"\nAll checks passed. Expect very roughly up to {settings.SRAVAANI_WORKERS}x that with {settings.SRAVAANI_WORKERS} workers on CPU; "
-          "on GPU the gain is smaller. Real calls are the true test: run the transcribe step on your manifest.")
+          "on GPU the gain is smaller. Real calls are the true test: start the API and send a few recordings.")
     print("Generated audio is a tone, not speech, so the transcript text is meaningless; only the speed matters here.")
 
 

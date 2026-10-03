@@ -9,3 +9,6 @@ soundfile==0.14.0
 numpy==2.2.6
 requests==2.34.2
 python-dotenv==1.2.3
+fastapi==0.142.2
+uvicorn==0.54.0
+python-multipart==0.0.32

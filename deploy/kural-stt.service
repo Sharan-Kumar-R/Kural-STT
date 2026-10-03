@@ -1,0 +1,23 @@
+[Unit]
+Description=Kural-STT SraVaani transcription API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kural
+WorkingDirectory=/opt/Kural-STT
+EnvironmentFile=/opt/Kural-STT/.env
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/opt/Kural-STT/venv/bin/python -m sravaani_eval.server
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/Kural-STT
+
+[Install]
+WantedBy=multi-user.target

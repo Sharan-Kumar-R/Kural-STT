@@ -1,112 +1,102 @@
-<h1 align="center">SraVaani vs Groq Whisper: Indian-Language Call Transcription Benchmark</h1>
+<h1 align="center">Kural-STT: SraVaani Speech-to-Text API for Indian-Language Calls</h1>
 <br>
 <p align="center">
   <img src="https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54" alt="Python">
   <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch">
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/Hugging%20Face-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="Hugging Face">
-  <img src="https://img.shields.io/badge/groq-FF6600?style=for-the-badge&logo=groq&logoColor=white" alt="Groq">
 </p>
 <br>
 
-🎧 Real phone calls in Tamil, Kannada and Telugu, transcribed two ways and judged by the same LLM.
+🎧 Self-hosted speech-to-text for phone calls in Indian languages, served over a secure HTTP API.
 
-This project compares two routes from call audio to an English transcript:
+Kural-STT runs [SraVaani-1.0](https://huggingface.co/ARTPARK-IISc/SraVaani-1.0) (ARTPARK / IISc, 65 Indian languages and dialects) on your own GPU or CPU. Upload a recording, or give its URL, and get the transcript back in the call's own script. No inference provider hosts SraVaani today, so this is how you run it as a service.
 
-   ⚡ **Groq Whisper large-v3 (translate)**: speech straight to English in one API call
+## Benchmark
 
-   🇮🇳 **SraVaani-1.0 + LLM translation**: [ARTPARK / IISc's SraVaani](https://huggingface.co/ARTPARK-IISc/SraVaani-1.0) writes native-script text on your own GPU or CPU, then a Groq-hosted LLM translates it to English
+200 real customer calls to an Indian gold-loan company, 40 each in Hindi, Kannada, Malayalam, Tamil and Telugu, 60 to 293 seconds long (8.4 hours of audio), October 2026.
 
-Both English transcripts are judged by the same Groq LLM prompt, so the transcript is the only thing that differs between the two sides. The benchmark counts how often each route leaves a real customer request hidden as "NOISE", how often the two agree on the caller's intent, and how fast SraVaani runs on your own hardware.
+An LLM judge (DeepSeek) read the English version of each call from every system with the names hidden and the order shuffled, rebuilt what was most likely said, and scored each version from 0 to 100 on the share of real content it captured: amounts, gold weight, names, the customer's request and the outcome. Each call was judged twice with a different order.
+
+| System | Average score | Best of the three on | Badly transcribed calls (score < 40) |
+| --- | ---: | ---: | ---: |
+| Sarvam Saaras V3 (paid API) | **82.6** | 147 of 200 | 1 |
+| **SraVaani-1.0 + LLM translation (this repo)** | **74.7** | 52 of 200 | 2 |
+| Groq Whisper large-v3, translate mode | 55.5 | 1 of 200 | 30 |
+
+**By language (average score):**
+
+| | Hindi | Kannada | Malayalam | Tamil | Telugu |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Sarvam Saaras V3 | 84.2 | 83.3 | 81.2 | 83.2 | 80.9 |
+| SraVaani + LLM translation | 81.6 | 71.8 | 73.0 | 70.7 | 76.5 |
+| Groq Whisper large-v3 | 62.5 | 48.3 | 51.1 | 61.2 | 54.2 |
+
+**Head to head:** SraVaani beats Groq Whisper by more than 5 points on 151 of 200 calls and loses on 24. Against Sarvam as the answer key, SraVaani captures 76.5% of the content against Groq's 57.6%, and loses a critical fact on 143 calls against 186.
+
+**Speed:**
+
+| System | Where | Time per call (average 2.5 min of audio) |
+| --- | --- | ---: |
+| Groq Whisper large-v3 | Groq cloud | 2.3 s |
+| SraVaani speech-to-text | Laptop CPU, one worker | 20.3 s (7.5× real time) |
+| SraVaani + LLM translation | Laptop CPU + Groq LLM | 26.2 s |
+
+GPU speed has not been measured yet; see [Performance and sizing](#performance-and-sizing).
+
+**Read these numbers with care:**
+- Scores come from one LLM judge that cannot hear the audio. Ranking was stable across the two shuffled runs, but they are estimates, not human-verified accuracy.
+- SraVaani writes the call's own script. The scores above use an LLM translation to English (Groq `openai/gpt-oss-120b`) so every system is judged in the same language. This API returns the native-script text only.
+- The translation writes numbers as words ("one lakh"), which matters if your downstream steps expect digits.
 
 ## Features
 
-- Works on any folder of call recordings: no database or private backend needed
-- Reproducible sample: a fixed seed picks the same calls every time
-- SraVaani inference in parallel worker processes (8 by default), on GPU when one is present, in 30-second pieces, with crash-safe resume
-- Worker count capped automatically to fit RAM and GPU memory
-- `check_setup.py` checks a new machine (PyTorch build, GPU, cores, RAM, token) before you run real calls
-- Groq Whisper baseline with automatic retry on rate limits
-- Faithful-translation prompt and a NOISE / intent judge, both on Groq
-- Optional fixed intent list, so both sides are scored on your own categories
-- Plain-text reports: per-group counts, disagreements, intent differences and side-by-side examples
+- SraVaani-1.0 on GPU or CPU, with long calls split into 30-second pieces
+- HTTP API: upload a file or give a recording URL, get the transcript and timing back
+- Parallel model workers (8 by default), warmed up at startup and capped automatically to fit RAM and GPU memory
+- API key required, private-network fetches blocked, size, time and queue limits
+- Crash recovery: a worker that dies in native code is replaced without restarting the service
+- Nothing stored: audio is deleted after each request, transcripts are not logged
+- `check_setup.py` checks a new machine before you deploy
+- systemd unit and HTTPS exposure through Cloudflare Tunnel
 
 ## How It Works
 
 ```
- data/audio/<group>/*.mp3  +  eval_config.json
-        │
-        ▼
- 1. sample      ──▶ data/manifest.json
-        │
-        ├──────────────────────────────┐
-        ▼                              ▼
- 2. transcribe (SraVaani,        3. baseline (Groq Whisper)
-    GPU or CPU, 8 workers)
-    data/sravaani_out.jsonl         data/groq_out.jsonl
-        │                              │
-        └──────────────┬───────────────┘
-                       ▼
- 4. compare     ──▶ data/compare_out.jsonl
-        │             (SraVaani → English, then both judged by one prompt)
-        ▼
- 5. report      ──▶ outputs/analysis.txt + outputs/examples.txt
+ client ──HTTPS──▶ Cloudflare Tunnel ──▶ API (FastAPI, one process, 127.0.0.1:8000)
+                                           │  checks key, size, queue
+                                           │  saves audio to a temp file
+                                           ▼
+                                  worker pool (8 processes)
+                                  each holds one SraVaani copy on GPU/CPU
+                                           │  16 kHz mono → 30 s pieces → text
+                                           ▼
+ client ◀──── JSON: text, audio length, timings ──── temp file deleted
 ```
 
-Every step appends one JSON line per call and skips calls it has already done, so any step can be stopped and re-run safely. Steps 2 and 3 are independent and can run at the same time.
+## Requirements
+
+| | Minimum | Recommended |
+| --- | --- | --- |
+| Python | 3.10 | 3.10 |
+| GPU | none (CPU works) | NVIDIA with 16 GB+ VRAM; a 32 GB V100 fits 8 workers |
+| RAM | 8 GB for 1 worker | about 4.5 GB per CPU worker; 64 GB for 8 |
+| CPU | 4 cores | 16 cores |
+| Disk | 2 GB (model weights are 909 MB) | 5 GB |
 
 ## Installation
 
 ### Step 1: Clone the Repository
 
-**Option A: Using VS Code Terminal**
-1. Open Visual Studio Code
-2. Open a new terminal (Terminal → New Terminal or ``Ctrl+Shift+` ``)
-3. Navigate to your desired directory:
-   ```bash
-   cd path/to/your/desired/folder
-   ```
-4. Clone the repository:
-   ```bash
-   git clone https://github.com/Sharan-Kumar-R/Kural-STT.git
-   ```
-5. Open the project folder:
-   ```bash
-   cd Kural-STT
-   ```
-6. Open the project in VS Code:
-   ```bash
-   code .
-   ```
-
-**Option B: Using VS Code Git Integration**
-1. Open Visual Studio Code
-2. Press `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (Mac)
-3. Type "Git: Clone" and select it
-4. Paste the repository URL: `https://github.com/Sharan-Kumar-R/Kural-STT.git`
-5. Choose a folder location and click "Select Repository Location"
-6. Click "Open" when prompted
-
-### Step 2: Check Python
-
-Python **3.10** is required. Verify it with:
-
 ```bash
-python --version
+git clone https://github.com/Sharan-Kumar-R/Kural-STT.git
+cd Kural-STT
 ```
 
-### Step 3: Create Virtual Environment
-
-Open a terminal in Visual Studio Code and run:
+### Step 2: Create and Activate a Virtual Environment
 
 ```bash
-python -m venv venv
-```
-
-### Step 4: Activate Virtual Environment
-
-**For Windows:**
-```bash
-venv\Scripts\activate
+python3.10 -m venv venv
 ```
 
 **For macOS/Linux:**
@@ -114,19 +104,14 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-After activation, you should see something like this in your terminal:
-```
-(venv) PS C:\Users\username\path\to\Kural-STT>
+**For Windows:**
+```bash
+venv\Scripts\activate
 ```
 
-### Step 5: Install PyTorch
+### Step 3: Install PyTorch
 
 Install PyTorch before the other dependencies, picking the build that matches your machine.
-
-**CPU only:**
-```bash
-pip install torch==2.14.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-```
 
 **NVIDIA Volta GPU (Tesla V100, Titan V):**
 ```bash
@@ -139,17 +124,22 @@ Volta works only with the CUDA 12.6 build. The default `pip install torch` gives
 pip install torch==2.14.0 torchaudio==2.11.0
 ```
 
-### Step 6: Install Dependencies
+**CPU only:**
+```bash
+pip install torch==2.14.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+```
+
+### Step 4: Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-MP3 decoding goes through `soundfile` (libsndfile), which is bundled with the wheel, so no separate FFmpeg install is needed.
+MP3 decoding goes through `soundfile` (libsndfile), bundled with the wheel, so no separate FFmpeg install is needed.
 
-## API Setup
+## Configuration
 
-### 1. Hugging Face Token (SraVaani access)
+### 1. Hugging Face Token
 
 The SraVaani weights are gated.
 
@@ -157,332 +147,225 @@ The SraVaani weights are gated.
 2. Sign in and accept the access conditions
 3. Open [Hugging Face → Settings → Access Tokens](https://huggingface.co/settings/tokens)
 4. Create a token with **Read** access
-5. Copy the token for later use
 
-The first run downloads about 870 MB of weights into `hf/`.
+The first start downloads about 909 MB of weights into `hf/`.
 
-### 2. Groq API Key (baseline, translation and judging)
+### 2. Environment File
 
-1. Visit [Groq Console](https://console.groq.com/)
-2. Create an account or sign in
-3. Open **API Keys** and create a new key
-4. Copy the API key for later use
-
-Groq is used three times per call: Whisper for the baseline transcript, and the LLM for translating SraVaani's text and for judging both English transcripts.
-
-### 3. Environment Configuration
-
-Copy the example file and fill in your keys:
-
-**For Windows:**
-```bash
-copy .env.example .env
-```
-
-**For macOS/Linux:**
 ```bash
 cp .env.example .env
 ```
 
-```env
-HF_TOKEN=your_hugging_face_token_here
-GROQ_API_KEY=your_groq_api_key_here
-
-GROQ_STT_MODEL=whisper-large-v3
-GROQ_LLM_MODEL=openai/gpt-oss-120b
-GROQ_WORKERS=4
-GROQ_BASE_URL=https://api.groq.com/openai/v1
-
-SRAVAANI_MODEL=ARTPARK-IISc/SraVaani-1.0
-SRAVAANI_WORKERS=8
-SRAVAANI_DEVICE=auto
-SRAVAANI_THREADS=
-SRAVAANI_PIECE_BATCH=8
-SRAVAANI_WORKER_RAM_GB=4.5
-SRAVAANI_WORKER_GPU_GB=3.5
-SRAVAANI_FP16=0
-SRAVAANI_JIT_OPT=
-SRAVAANI_TMP_DIR=
-SRAVAANI_CONFIG=
-SRAVAANI_DATA_DIR=
-SRAVAANI_OUTPUT_DIR=
+Set at least `HF_TOKEN` and `SRAVAANI_API_KEY`. Generate a key with:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `HF_TOKEN` | Yes | Downloads the gated SraVaani weights |
-| `GROQ_API_KEY` | Yes | Groq Whisper baseline, translation and judging |
-| `GROQ_STT_MODEL` | No | Groq speech model for the baseline; default `whisper-large-v3` |
-| `GROQ_LLM_MODEL` | No | Groq chat model for translating and judging; default `openai/gpt-oss-120b` |
-| `GROQ_WORKERS` | No | Parallel Groq requests; default `4`. Lower it if you hit rate limits |
-| `GROQ_BASE_URL` | No | Any OpenAI-compatible endpoint; default is Groq's |
+| `SRAVAANI_API_KEY` | Yes | Key every request must send; at least 24 random characters |
+| `SRAVAANI_HOST` / `SRAVAANI_PORT` | No | Where the API listens; default `127.0.0.1` / `8000`. Keep `127.0.0.1` when exposing through a tunnel |
+| `SRAVAANI_MAX_UPLOAD_MB` | No | Largest recording accepted; default `100` (a 10-minute telephony MP3 is about 1.2 MB) |
+| `SRAVAANI_REQUEST_TIMEOUT` | No | Seconds before giving up on one recording; default `1800` |
+| `SRAVAANI_MAX_QUEUE` | No | Requests allowed to wait beyond the busy workers before new ones get `503`; default `32` |
+| `SRAVAANI_ALLOW_URL` | No | `0` disables the `url` option so only uploads are accepted; default `1` |
+| `SRAVAANI_ALLOW_PRIVATE_URLS` | No | `1` lets `url` reach private or internal addresses; default `0`, keep it that way on an exposed server |
+| `SRAVAANI_ALLOW_NO_KEY` | No | `1` starts without a key; only on a fully private network; default `0` |
 | `SRAVAANI_MODEL` | No | Hugging Face model id; default `ARTPARK-IISc/SraVaani-1.0` |
-| `SRAVAANI_WORKERS` | No | Parallel transcription processes, each with its own model copy; default `8` |
+| `SRAVAANI_WORKERS` | No | Model copies serving requests in parallel; default `8` |
 | `SRAVAANI_DEVICE` | No | `auto` (GPU if visible, else CPU), `cuda`, `cuda:1` or `cpu`; default `auto` |
 | `SRAVAANI_THREADS` | No | CPU threads per worker; default splits the cores evenly on CPU, `2` on GPU |
 | `SRAVAANI_PIECE_BATCH` | No | 30-second pieces sent to the model together; default `8`. Lower it to save memory |
-| `SRAVAANI_WORKER_RAM_GB` | No | RAM budget per worker, used to cap the worker count; default `4.5` (measured peak about 4.3 GB on CPU) |
-| `SRAVAANI_WORKER_GPU_GB` | No | GPU memory budget per worker, used to cap the worker count; default `3.5` (an estimate; check with `nvidia-smi`) |
-| `SRAVAANI_FP16` | No | `1` runs the model in half precision on GPU: faster, accuracy not yet checked; default `0` |
+| `SRAVAANI_WORKER_RAM_GB` | No | RAM budget per worker, used to cap the worker count; default `4.5` |
+| `SRAVAANI_WORKER_GPU_GB` | No | GPU memory budget per worker, used to cap the worker count; default `3.5` |
+| `SRAVAANI_FP16` | No | `1` runs the model in half precision on GPU: about half the VRAM, accuracy not yet checked; default `0` |
 | `SRAVAANI_JIT_OPT` | No | `1` keeps TorchScript graph optimisation on. Default off on Windows, where it crashes natively, and on elsewhere |
-| `SRAVAANI_TMP_DIR` | No | Temp folder for model loading, useful when the system drive is short on space |
-| `SRAVAANI_CONFIG` | No | Path to the config file; default `eval_config.json` |
-| `SRAVAANI_DATA_DIR` | No | Where audio and per-step results live; default `data/` |
-| `SRAVAANI_OUTPUT_DIR` | No | Where reports are written; default `outputs/` |
+| `SRAVAANI_TMP_DIR` | No | Temp folder, useful when the system drive is short on space |
+| `SRAVAANI_LOG_DIR` | No | Where native crash traces are written; default `logs/` |
 
-**Important:** Replace the placeholder values with your own. `.env` is gitignored and must never be committed.
+**Important:** `.env` is gitignored and must never be committed.
 
-### 4. Evaluation Configuration
-
-Copy the example config:
-
-**For Windows:**
-```bash
-copy eval_config.example.json eval_config.json
-```
-
-**For macOS/Linux:**
-```bash
-cp eval_config.example.json eval_config.json
-```
-
-```json
-{
- "seed": 42,
- "call_context": "a call to an Indian gold-loan company",
- "intents": ["Gold Rate & Loan Amount", "Interest Rate & Charges", "Loan Renewal & Top-Up", "Other Request"],
- "groups": [
-  {"label": "Tamil Nadu", "language": "Tamil", "audio_subdir": "tamil", "calls": 20},
-  {"label": "Karnataka", "language": "Kannada", "audio_subdir": "kannada", "calls": 20}
- ],
- "examples": []
-}
-```
-
-| Key | Meaning |
-| --- | --- |
-| `seed` | Random seed, so the same calls are picked every time |
-| `call_context` | Fills both prompts: "…from `<call_context>`" |
-| `intents` | Allowed intents for the judge. Leave `[]` to let it write a short free label |
-| `groups[].label` | Group name shown in reports |
-| `groups[].language` | Spoken language, passed to the translation prompt |
-| `groups[].audio_subdir` | Folder under `data/audio/` holding this group's recordings |
-| `groups[].calls` | Calls to pick at random; leave it out to use every file |
-| `groups[].client` | Optional tag, shown in reports when you compare several businesses |
-| `groups[].intents` | Optional intent list that overrides the top-level one for this group |
-| `examples` | Call-id prefixes (file names) to print side by side in `outputs/examples.txt` |
-
-### 5. Add Your Recordings
-
-Put recordings in one folder per group. The file name (without extension) becomes the call id:
-
-```
-data/audio/
-├── tamil/
-│   ├── call_0001.mp3
-│   └── call_0002.mp3
-└── kannada/
-    └── call_0101.mp3
-```
-
-Supported formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`. Telephony audio at 8 kHz is fine; it is resampled to 16 kHz.
-
-## Usage
-
-Make sure your virtual environment is activated:
-
-```bash
-venv\Scripts\activate
-```
-
-Run each step from the project root, in order.
-
-### Step 1: Build the Sample
-
-```bash
-python -m sravaani_eval.sample
-```
-
-Lists the recordings in each group, picks `calls` of them at random and writes `data/manifest.json`:
-
-```
-Tamil Nadu: 64 recordings -> 20 chosen
-Karnataka: 41 recordings -> 20 chosen
-manifest: 40 calls
-```
-
-### Step 2: Transcribe with SraVaani
-
-On a new machine, check the setup first. It needs no recordings: it checks the PyTorch build, GPU, cores, RAM and token, then times a short transcription of generated audio:
+## Check the Machine
 
 ```bash
 python check_setup.py
 ```
 
-Then transcribe:
+It checks Python, the PyTorch build and whether it supports your GPU, cores, RAM, GPU memory and the token, then times one worker on generated audio. It needs no recordings. Fix any `FAIL` line before going further.
+
+## Run the API
 
 ```bash
-python -m sravaani_eval.transcribe
+python -m kural_stt.server
 ```
 
-Each call is resampled to 16 kHz mono and split into 30-second pieces. `SRAVAANI_WORKERS` processes (8 by default) each load their own model copy and take calls from a shared queue, on the GPU when one is visible. The worker count is lowered automatically when RAM or GPU memory cannot hold that many copies, and the log says so. Progress lines show the running speed as a multiple of real time.
+It loads every worker, prints `ready`, and listens on `SRAVAANI_HOST:SRAVAANI_PORT`. Run it as a single process; the parallelism is in its worker pool. Interactive docs are at `/docs`.
 
-A worker can die in native code (seen on Windows). The calls it was holding are then retried one at a time, and a call that crashes twice is recorded with an error instead of blocking the run. Calls that failed with an ordinary error are retried on the next run. The wrapper scripts restart the step until every call is done:
+## Using the API
 
+**Upload a file:**
 ```bash
-./run_transcribe.sh          # Linux / macOS
-```
-```powershell
-.\run_transcribe.ps1         # Windows
+curl -H "X-API-Key: $KEY" -F "file=@call.mp3" -F "call_id=abc123" https://stt.example.com/transcribe
 ```
 
-Measured speeds:
-
-| Machine | Workers | Speed |
-| --- | --- | --- |
-| Laptop, 16 threads, 17 GB RAM, CPU | 1 | 7.4× real time |
-| Same laptop | 2 (capped from 8 by RAM) | 7.7× real time |
-
-A 16-core desktop with 64 GB RAM can run all 8 workers on CPU. GPU speed has not been measured yet: run `check_setup.py`, then a real batch, and add your numbers here.
-
-### Step 3: Run the Groq Whisper Baseline
-
+**Or give a recording URL** (with an optional `Referer`, which some telephony providers require):
 ```bash
-python -m sravaani_eval.baseline
+curl -H "X-API-Key: $KEY" -F "url=https://example.com/recording.mp3" -F "referer=https://example.com/" https://stt.example.com/transcribe
 ```
 
-Sends each recording to Groq's Whisper translation endpoint and writes its English text to `data/groq_out.jsonl`. Groq accepts files up to 25 MB.
+**Python:**
+```python
+import requests
 
-### Step 4: Translate and Judge
-
-```bash
-python -m sravaani_eval.compare
+with open("call.mp3", "rb") as f:
+    r = requests.post("https://stt.example.com/transcribe", headers={"X-API-Key": KEY},
+                      files={"file": f}, data={"call_id": "abc123"}, timeout=1800)
+r.raise_for_status()
+print(r.json()["text"])
 ```
 
-For each call that has both transcripts it:
-1. Translates SraVaani's native-script text to English with the Groq LLM (temperature 0)
-2. Judges Groq Whisper's English: NOISE or real, intent, one-line summary
-3. Judges SraVaani's English with the same prompt
-4. Writes both verdicts to `data/compare_out.jsonl`
-
-Transcripts under three words are marked NOISE without calling the LLM.
-
-### Step 5: Write the Reports
-
-```bash
-python -m sravaani_eval.report
+**Response:**
+```json
+{
+ "call_id": "abc123",
+ "text": "native-script transcript ...",
+ "audio_sec": 96.2,
+ "infer_sec": 13.6,
+ "pieces": 4,
+ "device": "cuda",
+ "bytes": 192384,
+ "total_sec": 13.77,
+ "x_real_time": 7.1
+}
 ```
 
-Writes:
-- `outputs/analysis.txt`: per-group NOISE counts, intent agreement, errors, speed and every disagreement
-- `outputs/examples.txt`: Groq English, SraVaani native text and SraVaani English for the configured example calls
+`infer_sec` is model time; `total_sec` also includes the upload and any wait in the queue. When more requests arrive than there are workers, the extra ones wait their turn.
 
-To print other examples, pass call-id prefixes:
-
-```bash
-python -m sravaani_eval.report call_0001 call_0101
-```
-
-### Reading the Report
-
-| Column | Meaning |
+| Endpoint | Purpose |
 | --- | --- |
-| `groq NOISE` / `sravaani NOISE` | Calls the judge marked NOISE on each side |
-| `both real` | Calls where both sides found a real request |
-| `same intent (both real)` | Of those, how many got the same intent (sub-types such as `- GL` ignored) |
-| `groq->NOISE only` | Groq NOISE, SraVaani real: a request Groq hid |
-| `sravaani->NOISE only` | SraVaani NOISE, Groq real: a request SraVaani lost |
-| `errors g/s` | Judge errors on the Groq / SraVaani side |
+| `POST /transcribe` | One recording in (`file` upload or `url` form field, optional `referer` and `call_id`), transcript out |
+| `GET /health` | Device, worker count, busy workers, requests served and failed; no key needed |
+| `GET /docs` | Interactive API documentation |
 
-Set `intents` in the config before trusting the `same intent` column: with free labels, "gold loan inquiry" and "loan enquiry" count as different.
+| Status | Meaning |
+| --- | --- |
+| `400` | Sent both or neither of `file` and `url`, or a `url` that is not allowed |
+| `401` | Missing or wrong API key |
+| `413` | Larger than `SRAVAANI_MAX_UPLOAD_MB` |
+| `415` | Not a readable audio file |
+| `502` | The `url` could not be downloaded |
+| `503` | Queue full; retry after the `Retry-After` seconds |
+| `504` | Took longer than `SRAVAANI_REQUEST_TIMEOUT` |
 
-## Example Results
+Supported formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac` and anything else libsndfile or audioread can decode. Telephony audio at 8 kHz is fine; it is resampled to 16 kHz.
 
-From the first run: 90 real calls, 2.96 h of audio, September 2026. That run scored both sides with a production call-analysis pipeline instead of this repo's judge prompt, so your numbers will differ.
+## Security
 
-| Group | Calls | NOISE with Groq | NOISE with SraVaani | Groq NOISE, SraVaani real | SraVaani NOISE, Groq real |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Gold loans · Tamil | 20 | 9 | 4 | 5 | 0 |
-| Gold loans · Kannada | 20 | 9 | 6 | 5 | 2 |
-| Gold loans · Telugu | 20 | 6 | 4 | 3 | 1 |
-| Vehicle finance · Telugu | 30 | 15 | 15 | 0 | 0 |
-| **All** | **90** | **39** | **29** | **13** | **3** |
+- **API key required.** The server refuses to start without `SRAVAANI_API_KEY`, and rejects keys shorter than 24 characters or still set to the example value. Keys are compared in constant time. Send it as `X-API-Key: <key>` or `Authorization: Bearer <key>`.
+- **No internal fetches.** The `url` option only downloads from public internet addresses, checked again on every redirect, so it cannot be used to reach the host's own network, router or cloud metadata. Turn it off entirely with `SRAVAANI_ALLOW_URL=0`.
+- **Size, time and queue limits.** Oversized uploads are rejected while streaming; slow recordings time out; a full queue answers `503`.
+- **Nothing kept.** Audio is deleted after each request; transcripts are not stored or logged.
+- **HTTPS is your job.** The API speaks plain HTTP on `127.0.0.1`. Put HTTPS in front of it (below) before real calls travel over the internet, and never expose port 8000 directly.
 
-On the gold-loan calls, SraVaani plus translation cut NOISE from 40% to 23%, mostly short calls where Whisper's direct translation produced a few unrelated English words. The vehicle-finance calls did not change: their NOISE is IVR-menu and hold-queue audio that no transcription model can fix.
+## Deployment
 
-**Limits:** 20 to 30 calls per group, no human listening yet, and the result depends on the translation prompt as much as on SraVaani.
+On the GPU server (Linux), after installation and configuration:
 
-## Deactivating the Environment
+**1. Check the machine:** `python check_setup.py`
 
-When you're done working with the project, deactivate the virtual environment:
+**2. Run it as a service** so it starts on boot and restarts after a crash. The unit file assumes the repo is at `/opt/Kural-STT` and runs as a user named `kural`; edit both to match:
 
 ```bash
-deactivate
+sudo cp deploy/kural-stt.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kural-stt
+journalctl -u kural-stt -f          # wait for "ready"
+curl http://127.0.0.1:8000/health
 ```
+
+**3. Expose it over HTTPS with Cloudflare Tunnel.** No router port forwarding, no public IP and no certificate setup; the home or office network stays closed.
+
+Quick test (temporary random `https://...trycloudflare.com` address that changes on every restart):
+```bash
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+
+Permanent address on your own domain (free Cloudflare account with the domain added):
+```bash
+cloudflared tunnel login
+cloudflared tunnel create kural-stt
+cloudflared tunnel route dns kural-stt stt.example.com
+cloudflared tunnel run --url http://127.0.0.1:8000 kural-stt
+```
+Then run `sudo cloudflared service install` so the tunnel survives reboots too.
+
+**4. Hand over two things:** the HTTPS address (for example `https://stt.example.com`) and the API key, sent separately and privately. Callers use `https://stt.example.com/transcribe` as in the examples above.
+
+**Alternatives:** Tailscale (a private network between the two machines, nothing public at all), or a reverse proxy such as Caddy in front of an open port, which adds HTTPS automatically.
+
+## Performance and Sizing
+
+| Measured | Value |
+| --- | --- |
+| Model download | 909 MB (about 450 million parameters, stored in half precision) |
+| CPU RAM per worker, peak | 4.3 GB (8 pieces of 30 s per batch) |
+| Laptop CPU, 1 worker | 7.5× real time |
+| Laptop CPU, 2 workers | 7.7× real time overall |
+
+| Estimated, not yet measured | FP32 (default) | FP16 (`SRAVAANI_FP16=1`) |
+| --- | ---: | ---: |
+| VRAM per worker | about 2.5 to 3.5 GB | about 1.5 to 2 GB |
+| VRAM for 8 workers | about 20 to 28 GB | about 12 to 16 GB |
+
+Call length barely changes memory, because every call is cut into 30-second pieces; a 50-minute call peaks at about the same memory as a 2-minute one and just takes longer. Measure real VRAM while the API is busy with `nvidia-smi --query-gpu=memory.used,memory.total --format=csv -l 2`, then set `SRAVAANI_WORKER_GPU_GB` to match.
 
 ## Troubleshooting
 
 - **`Set HF_TOKEN in .env`**: the token is missing, or you have not accepted SraVaani's access conditions on Hugging Face
-- **`Set GROQ_API_KEY in .env`**: the Groq key is missing
-- **`Copy eval_config.example.json to eval_config.json`**: the config is missing
-- **`Missing audio folder …`**: a group's `audio_subdir` does not exist under `data/audio/`
-- **`HTTPError: 429`** after retries: lower `GROQ_WORKERS`, or wait for your Groq rate limit to reset
-- **`HTTPError: 413`** in the baseline: the recording is over Groq's 25 MB limit; convert it to mono MP3 first
-- **`HTTPError: 404`** on a model: that model was retired on Groq; pick a current one from the [Groq models page](https://console.groq.com/docs/models) and set `GROQ_STT_MODEL` or `GROQ_LLM_MODEL`
-- **Transcribe exits with no error partway through**: a native crash; run `./run_transcribe.sh` or `.\run_transcribe.ps1`, which restarts it and resumes
-- **`no kernel image is available for execution on the device`**: the PyTorch build does not support your GPU. For a V100, reinstall from the `cu126` index (Installation, Step 5)
-- **`not enough memory` / `CUDA out of memory`**: lower `SRAVAANI_WORKERS` or `SRAVAANI_PIECE_BATCH`, or raise `SRAVAANI_WORKER_RAM_GB` / `SRAVAANI_WORKER_GPU_GB` so fewer workers start
-- **GPU gets slower over time, or the machine shuts down**: a passively cooled data-centre card (such as a PCIe V100) needs forced airflow. Watch it with `nvidia-smi -q -d TEMPERATURE,PERFORMANCE` while it runs
+- **`Set SRAVAANI_API_KEY`** / **`SRAVAANI_API_KEY is too weak`** at startup: generate a key as shown in Configuration
+- **`no kernel image is available for execution on the device`**: the PyTorch build does not support your GPU. For a V100, reinstall from the `cu126` index (Installation, Step 3)
+- **`capping workers at N`** in the log: RAM or GPU memory cannot hold `SRAVAANI_WORKERS` copies, so fewer were started. Add memory, set `SRAVAANI_FP16=1`, or lower `SRAVAANI_PIECE_BATCH`
+- **`not enough memory` / `CUDA out of memory`**: lower `SRAVAANI_WORKERS` or `SRAVAANI_PIECE_BATCH`, or raise `SRAVAANI_WORKER_RAM_GB` / `SRAVAANI_WORKER_GPU_GB`
+- **`worker crashed natively; restarting the pool`** in the log: the model's native code crashed; the pool is rebuilt automatically. If it repeats on Linux, set `SRAVAANI_JIT_OPT=0`. Traces are in `logs/fault.log`
+- **GPU gets slower over time, or the machine shuts down**: a passively cooled data-centre card (such as a PCIe V100) needs forced airflow. Watch it with `nvidia-smi -q -d TEMPERATURE,PERFORMANCE`
+- **`502` on a `url`**: the recording host refused the download; many telephony providers need a `referer`, or links expire
 - **Model download fails or the system drive fills up**: set `SRAVAANI_TMP_DIR` to a folder on a larger drive
-- **A step does nothing**: every call is already done; delete that step's output file in `data/` to redo it
-- Check installed packages with `pip list`, and make sure the virtual environment is active
 
 ## Project Structure
 
 ```
 Kural-STT/
-├── .env                        # Your keys (gitignored)
 ├── .env.example                # Template for .env
-├── .gitignore                  # Keeps keys, audio, data and model weights out of git
-├── eval_config.json            # Your groups and intents (gitignored)
-├── eval_config.example.json    # Template for eval_config.json
+├── .gitattributes              # Keeps shell files on LF line endings
+├── .gitignore                  # Keeps keys, audio, logs and model weights out of git
 ├── README.md                   # This documentation
-├── check_setup.py              # Checks a new machine before real runs
 ├── requirements.txt            # Python dependencies
-├── run_transcribe.sh           # Linux/macOS: restarts the transcribe step until every call is done
-├── run_transcribe.ps1          # Windows: restarts the transcribe step until every call is done
-├── sravaani_eval/
-│   ├── __init__.py
-│   ├── settings.py             # Paths, model ids, API settings and config loading
-│   ├── store.py                # JSON and JSON Lines helpers
-│   ├── groq_client.py          # Groq Whisper and chat calls with retry
-│   ├── sample.py               # Step 1: pick recordings into a manifest
-│   ├── transcribe.py           # Step 2: SraVaani transcription, parallel workers, GPU or CPU
-│   ├── baseline.py             # Step 3: Groq Whisper speech-to-English
-│   ├── compare.py              # Step 4: translate and judge both routes
-│   └── report.py               # Step 5: analysis and example reports
-├── data/                       # Audio, manifest and per-step results (gitignored)
-├── outputs/                    # Generated reports (gitignored)
-├── hf/                         # Hugging Face model cache (gitignored)
-└── venv/                       # Virtual environment (gitignored)
+├── check_setup.py              # Checks a new machine before deployment
+├── deploy/
+│   └── kural-stt.service       # systemd unit for running the API permanently
+└── kural_stt/
+    ├── __init__.py
+    ├── settings.py             # Settings read from .env
+    ├── transcribe.py           # SraVaani engine: device, worker sizing, model loading, transcription
+    └── server.py               # HTTP API, worker pool and security checks
 ```
 
 ## Privacy
 
-Call recordings, transcripts and reports contain real people's voices, names and amounts. `data/`, `outputs/`, every audio format, `.env` and `eval_config.json` are gitignored. Keep them that way, and never paste transcript text into issues or pull requests. Sending recordings to Groq sends them to a third-party API: make sure you are allowed to.
+Call recordings contain real people's voices, names and amounts. Only process audio you are allowed to process, keep the API behind HTTPS and a strong key, and never commit `.env`, recordings or transcripts. The service deletes audio after each request and does not store transcripts.
 
 ## Acknowledgements
 
 - [SraVaani-1.0](https://huggingface.co/ARTPARK-IISc/SraVaani-1.0) by ARTPARK and IISc (MIT licence)
-- [Whisper large-v3](https://github.com/openai/whisper) by OpenAI, served by [Groq](https://groq.com/)
+- Benchmark references: [Sarvam Saaras V3](https://www.sarvam.ai/) and [Whisper large-v3](https://github.com/openai/whisper) served by [Groq](https://groq.com/)
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+4. Submit a pull request
 
 In case of any queries, please leave a message or contact me via the email provided in my profile.
 

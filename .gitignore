@@ -2,10 +2,10 @@
 .env.*
 !.env.example
 
-eval_config.json
-
+logs/
 data/
 outputs/
+eval_config.json
 
 *.mp3
 *.wav
