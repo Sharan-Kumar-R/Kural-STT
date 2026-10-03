@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 
 from kural_stt import settings
 from kural_stt import transcribe as tr
@@ -44,6 +45,8 @@ async def warm_up(pool: ProcessPoolExecutor) -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Create and warm the worker pool on startup, shut it down on exit."""
+    if not settings.HF_TOKEN:
+        raise SystemExit("Set HF_TOKEN in .env and accept the SraVaani-1.0 terms on Hugging Face; the weights are gated.")
     key = settings.SRAVAANI_API_KEY
     if not key and not settings.SRAVAANI_ALLOW_NO_KEY:
         raise SystemExit("Set SRAVAANI_API_KEY in .env (24+ random characters) before starting the API. "
@@ -75,6 +78,36 @@ def check_key(authorization: Optional[str], x_api_key: Optional[str]) -> None:
     given = x_api_key or (authorization[7:] if authorization and authorization.lower().startswith("bearer ") else None)
     if not given or not secrets.compare_digest(given, expected):
         raise HTTPException(status_code=401, detail="Missing or wrong API key. Send it as 'X-API-Key: <key>' or 'Authorization: Bearer <key>'.")
+
+
+class GuardUploads:
+    """Reject /transcribe requests with a wrong key, no Content-Length or an oversized body before any of the body is read."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "POST" and scope["path"].rstrip("/") == "/transcribe":
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
+            error = None
+            try:
+                check_key(headers.get("authorization"), headers.get("x-api-key"))
+            except HTTPException as ex:
+                error = (ex.status_code, ex.detail)
+            if not error:
+                length = headers.get("content-length")
+                if length is None:
+                    error = (411, "Send a Content-Length header; chunked uploads are not accepted.")
+                elif not length.isdigit() or int(length) > (settings.SRAVAANI_MAX_UPLOAD_MB + 1) * CHUNK:
+                    error = (413, f"Request larger than {settings.SRAVAANI_MAX_UPLOAD_MB} MB.")
+            if error:
+                state["failed"] += 1
+                await JSONResponse({"detail": error[1]}, status_code=error[0])(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(GuardUploads)
 
 
 async def save_upload(upload: UploadFile, path: str) -> int:

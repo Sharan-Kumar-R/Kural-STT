@@ -252,6 +252,7 @@ print(r.json()["text"])
 | --- | --- |
 | `400` | Sent both or neither of `file` and `url`, or a `url` that is not allowed |
 | `401` | Missing or wrong API key |
+| `411` | No `Content-Length` header (chunked upload) |
 | `413` | Larger than `SRAVAANI_MAX_UPLOAD_MB` |
 | `415` | Not a readable audio file |
 | `502` | The `url` could not be downloaded |
@@ -264,8 +265,10 @@ Supported formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac` and anything else lib
 
 - **API key required.** The server refuses to start without `SRAVAANI_API_KEY`, and rejects keys shorter than 24 characters or still set to the example value. Keys are compared in constant time. Send it as `X-API-Key: <key>` or `Authorization: Bearer <key>`.
 - **No internal fetches.** The `url` option only downloads from public internet addresses, checked again on every redirect, so it cannot be used to reach the host's own network, router or cloud metadata. Turn it off entirely with `SRAVAANI_ALLOW_URL=0`.
-- **Size, time and queue limits.** Oversized uploads are rejected while streaming; slow recordings time out; a full queue answers `503`.
+- **Checked before the upload is read.** The key and the declared size (`Content-Length`) are checked before any of the request body is accepted, so nobody without the key, and no oversized request, can fill the disk. Requests without a `Content-Length` get `411`; curl, `requests` and browsers always send one.
+- **Size, time and queue limits.** Uploads and downloaded recordings over `SRAVAANI_MAX_UPLOAD_MB` are refused; slow recordings time out; a full queue answers `503`.
 - **Nothing kept.** Audio is deleted after each request; transcripts are not stored or logged.
+- **Known limit of the URL check.** The address is checked when the host name is resolved, and `requests` resolves it again when it connects. Someone who holds the API key and controls a DNS server could switch the address in between. If only your own systems call the API with links from known providers, this is low risk; otherwise set `SRAVAANI_ALLOW_URL=0` and upload files instead.
 - **HTTPS is your job.** The API speaks plain HTTP on `127.0.0.1`. Put HTTPS in front of it (below) before real calls travel over the internet, and never expose port 8000 directly.
 
 ## Deployment
